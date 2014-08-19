@@ -18,6 +18,7 @@ SDL_Rect* make_rect(int x, int y, int w, int h) {
 import "C"
 import (
 	"errors"
+	"image/color"
 	"log"
 	"runtime"
 	"unsafe"
@@ -62,15 +63,13 @@ func NewWindow(title string, xpos, ypos, w, h int) (*Window, error) {
 }
 
 func (w *Window) Copy(tex *Texture, src, dst *Rect) error {
-	var csrc *C.SDL_Rect = nil
+	csrc := sdlRect(src)
 	if src != nil {
-		csrc = sdlRect(src)
 		defer C.free(unsafe.Pointer(csrc))
 	}
 
-	var cdst *C.SDL_Rect = nil
+	cdst := sdlRect(dst)
 	if dst != nil {
-		cdst = sdlRect(dst)
 		defer C.free(unsafe.Pointer(cdst))
 	}
 
@@ -122,7 +121,8 @@ func freewin(w *Window) {
 }
 
 type Surface struct {
-	surf *C.SDL_Surface
+	surf   *C.SDL_Surface
+	pixfmt *C.SDL_PixelFormat
 }
 
 func NewSurface(w, h int) (*Surface, error) {
@@ -130,22 +130,60 @@ func NewSurface(w, h int) (*Surface, error) {
 	if C.SDL_GetCurrentDisplayMode(0, &curr) != 0 {
 		return nil, sdlerr()
 	}
-	format := C.SDL_AllocFormat(curr.format)
+	pixfmt := C.SDL_AllocFormat(curr.format)
 
 	s := C.SDL_CreateRGBSurface(0, C.int(w), C.int(h),
-		C.int(format.BitsPerPixel),
-		format.Rmask, format.Gmask,
-		format.Bmask, format.Amask)
+		C.int(pixfmt.BitsPerPixel),
+		pixfmt.Rmask, pixfmt.Gmask,
+		pixfmt.Bmask, pixfmt.Amask)
 	if s == nil {
 		return nil, sdlerr()
 	}
 
-	surf := &Surface{s}
+	surf := &Surface{s, pixfmt}
 	runtime.SetFinalizer(surf, freesurf)
 	return surf, nil
 }
 
-func freesurf(s *Surface) { C.SDL_FreeSurface(s.surf) }
+func (s *Surface) FillRect(r *Rect, c color.Color) error {
+	cr := sdlRect(r)
+	if cr != nil {
+		defer C.free(unsafe.Pointer(cr))
+	}
+
+	if C.SDL_FillRect(s.surf, cr, s.sdlpix(c)) != 0 {
+		return sdlerr()
+	}
+	return nil
+}
+
+func (s *Surface) sdlpix(c color.Color) C.Uint32 {
+	r, g, b, a := c.RGBA()
+	return C.SDL_MapRGBA(s.pixfmt, C.Uint8(r), C.Uint8(g), C.Uint8(b), C.Uint8(a))
+}
+
+func (s *Surface) Blit(other *Surface, src, dst *Rect) error {
+	csrc := sdlRect(src)
+	if src != nil {
+		defer C.free(unsafe.Pointer(csrc))
+	}
+
+	cdst := sdlRect(dst)
+	if dst != nil {
+		defer C.free(unsafe.Pointer(cdst))
+	}
+
+	status := C.SDL_BlitSurface(s.surf, csrc, other.surf, cdst)
+	if status != 0 {
+		return sdlerr()
+	}
+	return nil
+}
+
+func freesurf(s *Surface) {
+	C.SDL_FreeSurface(s.surf)
+	C.SDL_FreeFormat(s.pixfmt)
+}
 
 type Texture struct {
 	tex *C.SDL_Texture
@@ -159,6 +197,9 @@ type Rect struct {
 }
 
 func sdlRect(r *Rect) *C.SDL_Rect {
+	if r == nil {
+		return nil
+	}
 	return C.make_rect(C.int(r.X), C.int(r.Y), C.int(r.W), C.int(r.H))
 }
 
