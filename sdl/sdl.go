@@ -26,10 +26,9 @@ import (
 
 func init() {
 	log.SetFlags(0)
-	success := bool(C.SDL_Init(C.SDL_INIT_EVERYTHING) != 0)
-	if !success {
-		err := C.GoString(C.SDL_GetError())
-		log.Fatalf("SDL_Init Error: %v", err)
+	status := C.SDL_Init(C.SDL_INIT_EVERYTHING)
+	if status != 0 {
+		log.Fatal(sdlerr())
 	}
 }
 
@@ -47,7 +46,7 @@ func NewWindow(title string, xpos, ypos, w, h int) (*Window, error) {
 	cs := C.CString(title)
 	defer C.free(unsafe.Pointer(cs))
 
-	ww := C.SDL_CreateWindow(cs, C.int(xpos), C.int(ypos), C.int(w), C.int(h), C.Uint32(0))
+	ww := C.SDL_CreateWindow(cs, C.int(xpos), C.int(ypos), C.int(w), C.int(h), 0)
 	if ww == nil {
 		return nil, sdlerr()
 	}
