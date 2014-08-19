@@ -3,7 +3,17 @@ package sdl
 /*
 #cgo pkg-config: sdl2
 
-#include "SDL2/SDL.h
+#include "SDL2/SDL.h"
+
+SDL_Rect* make_rect(int x, int y, int w, int h) {
+	SDL_Rect* r = malloc(sizeof(SDL_Rect));
+	(*r).x = x;
+	(*r).y = y;
+	(*r).w = w;
+	(*r).h = h;
+	return r;
+};
+
 */
 import "C"
 import (
@@ -29,31 +39,61 @@ const (
 
 type Window struct {
 	win *C.SDL_Window
+	ren *C.SDL_Renderer
 }
 
 func NewWindow(title string, xpos, ypos, w, h int) (*Window, error) {
 	cs := C.CString(title)
 	defer C.free(unsafe.Pointer(cs))
 
-	w := C.SDL_CreateWindow(cs, C.int(xpos), C.int(ypos), C.int(w), C.int(h), 0)
-	if w == nil {
+	ww := C.SDL_CreateWindow(cs, C.int(xpos), C.int(ypos), C.int(w), C.int(h), C.Uint32(0))
+	if ww == nil {
 		return nil, sdlerr()
 	}
 
-	win := &Window{w}
-	runtime.SetFinalizer(w, freewin)
+	r := C.SDL_CreateRenderer(ww, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
+	if r == nil {
+		return nil, sdlerr()
+	}
+
+	win := &Window{ww, r}
+	runtime.SetFinalizer(win, freewin)
 	return win, nil
 }
 
-func (w *Window) NewRenderer() (*Renderer, error) {
-	ren := C.SDL_CreateRenderer(w.win, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
-	if ren == nil {
+func (w *Window) Copy(tex *Texture, src, dst *Rect) error {
+	var csrc *C.SDL_Rect = nil
+	if src != nil {
+		csrc = sdlRect(src)
+		defer C.free(unsafe.Pointer(csrc))
+	}
+
+	var cdst *C.SDL_Rect = nil
+	if dst != nil {
+		cdst = sdlRect(dst)
+		defer C.free(unsafe.Pointer(cdst))
+	}
+
+	status := C.SDL_RenderCopy(w.ren, tex.tex, csrc, cdst)
+	if status != 0 {
+		return sdlerr()
+	}
+	return nil
+}
+
+func (w *Window) Present() { C.SDL_RenderPresent(w.ren) }
+
+func (w *Window) Clear() { C.SDL_RenderClear(w.ren) }
+
+func (w *Window) NewTexture(s *Surface) (*Texture, error) {
+	t := C.SDL_CreateTextureFromSurface(w.ren, s.surf)
+	if t == nil {
 		return nil, sdlerr()
 	}
 
-	r := &Renderer{ren}
-	runtime.SetFinalizer(r, freeren)
-	return r, nil
+	tex := &Texture{t}
+	runtime.SetFinalizer(tex, freetex)
+	return tex, nil
 }
 
 func (w *Window) Show() { C.SDL_ShowWindow(w.win) }
@@ -68,14 +108,58 @@ func (w *Window) Fullscreen() { C.SDL_SetWindowFullscreen(w.win, C.SDL_WINDOW_FU
 
 func (w *Window) Windowed() { C.SDL_SetWindowFullscreen(w.win, 0) }
 
-func (w *Window) SetGrab(grab bool) { C.SDL_SetWindowGrab(w.win, grab) }
-
-func sdlerr() error { return errors.New(C.GoString(C.SDL_GetError())) }
-
-type Renderer struct {
-	ren *C.SDL_Renderer
+func (w *Window) SetGrab(grab bool) {
+	if grab {
+		C.SDL_SetWindowGrab(w.win, 1)
+	} else {
+		C.SDL_SetWindowGrab(w.win, 0)
+	}
 }
 
-func freewin(w *Window) { C.SDL_DestroyWindow(w.win) }
+func freewin(w *Window) {
+	C.SDL_DestroyRenderer(w.ren)
+	C.SDL_DestroyWindow(w.win)
+}
 
-func freeren(r *Renderer) { C.SDL_DestroyRenderer(r.ren) }
+type Surface struct {
+	surf *C.SDL_Surface
+}
+
+func NewSurface(w, h int) (*Surface, error) {
+	var curr C.SDL_DisplayMode
+	if C.SDL_GetCurrentDisplayMode(0, &curr) != 0 {
+		return nil, sdlerr()
+	}
+	format := C.SDL_AllocFormat(curr.format)
+
+	s := C.SDL_CreateRGBSurface(0, C.int(w), C.int(h),
+		C.int(format.BitsPerPixel),
+		format.Rmask, format.Gmask,
+		format.Bmask, format.Amask)
+	if s == nil {
+		return nil, sdlerr()
+	}
+
+	surf := &Surface{s}
+	runtime.SetFinalizer(surf, freesurf)
+	return surf, nil
+}
+
+func freesurf(s *Surface) { C.SDL_FreeSurface(s.surf) }
+
+type Texture struct {
+	tex *C.SDL_Texture
+}
+
+func freetex(t *Texture) { C.SDL_DestroyTexture(t.tex) }
+
+type Rect struct {
+	X, Y int
+	W, H int
+}
+
+func sdlRect(r *Rect) *C.SDL_Rect {
+	return C.make_rect(C.int(r.X), C.int(r.Y), C.int(r.W), C.int(r.H))
+}
+
+func sdlerr() error { return errors.New(C.GoString(C.SDL_GetError())) }
